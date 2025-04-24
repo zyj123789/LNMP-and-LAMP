@@ -1,0 +1,122 @@
+---
+- name: "配置lvs调度器"
+  hosts: lvs
+  tasks:
+    - name: 下载ipvsadm
+      yum:
+        name: ipvsadm
+        state: present
+
+    - name: 下载keepalived
+      yum:
+        name: keepalived
+        state: present
+        
+    - name: 开启路由转发
+      shell: echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+
+    - name: 配置keepalived.conf
+      template:
+        src: /tmp/templates/keepalived.j2
+        dest: /etc/keepalived/keepalived.conf
+
+    - name: 启动keepalived
+      service:
+        name: keepalived
+        state: restarted
+
+    - name: 清除ipvsadm规则
+      shell: "ipvsadm -C"
+
+    - name: 添加vip
+      shell: "ipvsadm -A -t 192.168.32.100:80"
+
+    - name: 添加真实服务器
+      shell: "ipvsadm -a -t 192.168.32.100:80 -r 193.168.32.160:80 -g"
+
+    - name: 添加真实服务器
+      shell: "ipvsadm -a -t 192.168.32.100:80 -r 193.168.32.148:80 -g"
+
+    - name: 保存ipvsadm规则
+      shell: "ipvsadm -S > /etc/sysconfig/ipvsadm"
+
+
+- name: "配置nginx服务器"
+  hosts: nginx
+  tasks:
+    - name: 下载nginx
+      yum:
+        name: nginx
+        state: present
+
+    - name: nginx.conf.j2模板
+      template:
+        src: /tmp/templates/nginx.conf.j2
+        dest: /etc/nginx/nginx.conf
+
+    - name: 创建nginx用户
+      user:
+        name: nginx
+        createhome: no
+        shell: /sbin/nologin
+    
+    - name: 永久配置虚拟网卡
+      template:
+        src: /tmp/templates/lo:0.j2
+        dest: /etc/sysconfig/network-scripts/ifcfg-lo:0
+
+    - name: 重启网卡
+      service:
+        name: network
+        state: restarted
+
+    - name: 永久配置arp不响应
+      template:
+        src: /tmp/templates/sysctl.j2
+        dest: /etc/sysctl.conf
+
+    - name: 配置生效
+      shell: sysctl -p
+
+    - name: 重启nginx
+      service:
+        name: nginx
+        state: restarted
+        enabled: yes
+
+- name: "配置3台web"
+  hosts: web
+  vars:
+    hosts_user:
+      - { node: "01", ip: "192.168.32.150" }
+      - { node: "02", ip: "192.168.32.151" }
+      - { node: "03", ip: "192.168.32.152" }
+
+  tasks:
+    - name: 下载http
+      yum: 
+        name: httpd
+        state: present
+
+    - name: 修改网页界面
+      copy:
+        content: "this is a web,now you are in {{ item.node }}"
+        dest: /var/www/html/index.html
+        mode: 0644
+        owner: apache
+        group: apache
+      loop: "{{ hosts_user }}"
+      when: ansible_host == item.ip
+
+    - name: 启动并启用Apache
+      service:
+        name: httpd
+        state: started
+        enabled: yes
+
+    - name: 重启Apache服务
+      service:
+        name: httpd
+        state: restarted
+...
+
