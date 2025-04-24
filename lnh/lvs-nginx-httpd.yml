@@ -17,7 +17,7 @@
 
     - name: 配置keepalived.conf
       template:
-        src: /tmp/templates/keepalived.j2
+        src: keepalived.j2
         dest: /etc/keepalived/keepalived.conf
 
     - name: 启动keepalived
@@ -51,7 +51,7 @@
 
     - name: nginx.conf.j2模板
       template:
-        src: /tmp/templates/nginx.conf.j2
+        src: nginx.conf.j2
         dest: /etc/nginx/nginx.conf
 
     - name: 创建nginx用户
@@ -62,7 +62,7 @@
     
     - name: 永久配置虚拟网卡
       template:
-        src: /tmp/templates/lo:0.j2
+        src: lo:0.j2
         dest: /etc/sysconfig/network-scripts/ifcfg-lo:0
 
     - name: 重启网卡
@@ -72,7 +72,7 @@
 
     - name: 永久配置arp不响应
       template:
-        src: /tmp/templates/sysctl.j2
+        src: sysctl.j2
         dest: /etc/sysctl.conf
 
     - name: 配置生效

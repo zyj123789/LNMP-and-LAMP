@@ -1,0 +1,2 @@
+"这是一个使用playbook剧本写的lvs+nginx+httpd的自动化运维部署"
+"其中,'.yml'剧本里面的ip,keepalived.j2,nginx.conf.j2都需要改成对应机器的ip"
