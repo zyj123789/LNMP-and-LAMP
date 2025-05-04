@@ -1,0 +1,35 @@
+# 某写客户端遵循 client的配置
+#[client]
+
+# mysql命令客户端的配置
+#[mysql]
+
+# 指定以下为 mysqld 服务的配置
+[mysqld]
+# 指定服务运行用户 默认mysql
+user=mysql
+# 指定服务端口 默认3306
+port=3306
+# 不允许服务链接 0:禁止  1:允许
+symbolic-links=0
+# 指定服务的工作路径(安装路径),rpm安装无需指定，默认在 /usr
+# basedir=/usr/
+# 指定数据路径
+datadir=/var/lib/mysql
+# 指定套接字文件路径
+socket=/var/lib/mysql/mysql.sock
+# 指定错误日志的路径
+log-error=/var/log/mysqld.log
+# 指定进程pid 记录文件
+pid-file=/var/run/mysqld/mysqld.pid
+# 指定最大并发连接数
+# max_connections=300
+# 指定默认的字符编码
+character-set-server=utf8mb4
+# 指定默认的查询规则的字符编码
+collation-server=utf8mb4_general_ci
+# 跳过连接时的反向解析,提高连接速度
+skip-name-resolve
+
+# 跳过授权验证，无需密码即可连接数据库
+# skip-tables-grant

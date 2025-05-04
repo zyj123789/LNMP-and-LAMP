@@ -1,0 +1,5 @@
+".yml'剧本里面的ip,keepalived.j2,nginx.conf.j2都需要改成对应机器的ip"
+
+"lnh是一个使用playbook剧本写的lvs+nginx+httpd的自动化运维部署"
+"LNMP是Linux nginx MySQL php"
+"LAMP是Linux Apache MySQL php"

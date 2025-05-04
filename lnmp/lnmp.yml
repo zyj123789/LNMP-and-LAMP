@@ -1,0 +1,154 @@
+---
+- name: "配置mysql"
+  hosts: mysql
+  vars:
+    mysql_root_password: 'ZYJ891317@'
+  tasks:
+    - name: 安装 MySQL 仓库
+      shell: wget  -O /tmp/mysql84-community-release-el7-1.noarch.rpm   https://dev.mysql.com/get/mysql84-community-release-el7-1.noarch.rpm
+
+    - name: 
+      shell: rpm  -qpl  /tmp/mysql84-community-release-el7-1.noarch.rpm 
+
+    - name: 配置mysql文件
+      template:
+        src: my.cnf.j2
+        dest: /etc/my.cnf
+      notify: 重启 MySQL
+
+    - name: 创建MySQL运行目录
+      file:
+        path: "{{ item }}"
+        owner: mysql
+        group: mysql
+        mode: "0755"
+        state: directory
+      loop:
+        - /var/log/mysqld
+        - /var/lib/mysql
+        - /var/run/mysqld
+
+    - name: 启动MySQL服务
+      service:
+        name: mysqld
+        enabled: yes
+        state: started
+      register: mysql_service
+
+    # 获取临时密码（增加等待时间）
+    - name: 获取初始密码
+      shell: |
+        for i in {1..30}; do
+          if grep 'temporary password' /var/log/mysqld.log; then
+            grep 'temporary password' /var/log/mysqld.log | awk '{print $NF}'
+            exit 0
+          fi
+          sleep 1
+        done
+        exit 1
+      register: temp_password
+      changed_when: false
+      become: yes
+
+    # 修改 root 密码
+    - name: 设置root密码
+      mysql_user:
+        login_user: root
+        login_password: "{{ temp_password.stdout }}"
+        user: root
+        password: "{{ mysql_root_password }}"
+        check_implicit_admin: yes
+        host: localhost
+        priv: "*.*:ALL,GRANT"
+      no_log: true
+
+  handlers:
+    - name: 启动 MySQL
+      service:
+        name: mysqld
+        state: started
+
+    - name: 重启 MySQL
+      service:
+        name: mysqld
+        state: restarted
+
+- name: "配置nginx服务器"
+  hosts: nginx
+  tasks:
+    - name: 下载nginx
+      yum:
+        name: nginx
+        state: present
+
+    - name: nginx.conf.j2模板
+      template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/nginx.conf
+
+    - name: 创建nginx用户
+      user:
+        name: nginx
+        createhome: no
+        shell: /sbin/nologin
+    
+    - name: 重启nginx
+      service:
+        name: nginx
+        state: restarted
+        enabled: yes
+
+- name: 配置网页端
+  hosts: web
+  tasks:
+    - name: 下载 epel
+      yum:
+        name: epel-release
+        state: present
+
+    - name: 安装php源
+      shell: rpm -Uvh https://mirrors.tencent.com/remi/enterprise/remi-release-7.rpm
+  
+    - name: 启动仓库
+      shell: yum-config-manager --enable remi-php83
+  
+    - name: 安装php
+      yum:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - php
+        - php-cli
+        - php-fpm
+        - php-mysqlnd
+        - php-zip
+        - php-devel
+        - php-gd
+        - php-mcrypt
+        - php-mbstring
+        - php-curl
+        - php-xml
+        - php-pear
+        - php-bcmath
+        - php-json
+ 
+    - name: 启动php-fpm
+      service:
+        name: php-fpm
+        enabled: yes
+        state: started
+  
+    - name: 验证lnmp
+      copy:
+        dest: /usr/local/nginx/html/index.php
+        content: |
+          <?php
+          phpinfo();
+          ?>
+ 
+    - name: 重启nginx
+      service:
+        name: nginx
+        state: restarted
+...
+

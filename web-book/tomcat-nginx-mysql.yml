@@ -1,0 +1,274 @@
+---
+### 第一部分：Nginx高可用集群
+- name: "配置nginx服务器"
+  hosts: nginx
+  become: yes
+  tasks:
+    - name: 下载nginx,keepalived
+      yum:
+        name: [nginx,keepalived,nfs-utils]
+        state: present
+
+    - name: 配置Nginx负载均衡
+      template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/nginx.conf
+      notify: 重启Nginx
+
+    - name: 创建nginx用户
+      user:
+        name: nginx
+        createhome: no
+        shell: /sbin/nologin
+
+    - name: 开启路由转发
+      shell: echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+
+    - name: 配置keepalived.conf
+      template:
+        src: keepalived.j2
+        dest: /etc/keepalived/keepalived.conf
+      notify: 重启Keepalived
+
+  handlers:
+    - name: 重启Nginx
+      systemd: 
+        name: nginx 
+        state: restarted
+
+    - name: 重启Keepalived
+      systemd: 
+        name: keepalived 
+        state: restarted
+
+### 第2部分：MySQL+NFS服务端
+- name: 部署MySQL+NFS服务
+  hosts: mysql
+  become: yes
+  vars:
+    nfs_share: /usr/local/tomcat/webapps
+    db_root_pass: "Test@123"  # 测试环境用简单密码
+
+  tasks:
+    - name: 安装必要依赖
+      yum:
+        name: [libaio, numactl, nfs-utils]
+        state: present
+
+    - name: 安装 MySQL 仓库
+      shell: wget -O /tmp/mysql84-community-release-el7-1.noarch.rpm   https://dev.mysql.com/get/mysql84-community-release-el7-1.noarch.rpm
+
+    - name: rpm Mysql
+      shell: rpm -ivh  /tmp/mysql84-community-release-el7-1.noarch.rpm
+
+    - name: 配置mysql文件
+      template:
+        src: my.cnf.j2
+        dest: /etc/my.cnf
+      notify: 重启 MySQL
+
+    - name: 安装MySQL
+      yum:
+        name: mysql-community-server
+        state: present
+
+    - name: 创建MySQL运行目录
+      file:
+        path: "{{ item }}"
+        owner: mysql
+        group: mysql
+        mode: "0755"
+        state: directory
+      loop:
+        - /var/log/mysqld
+        - /var/lib/mysql
+        - /var/run/mysqld
+
+    - name: 创建共享目录
+      file:
+        path: "{{ nfs_share }}"
+        state: directory
+        mode: 0777  # 允许tomcat节点写入
+
+    - name: 配置NFS共享
+      lineinfile:
+        path: /etc/exports
+        line: "{{ nfs_share }} 192.168.32.175(rw,sync) 192.168.32.176(rw,sync)"
+        regexp: "^{{ nfs_share | regex_escape() }}"
+        state: present
+      notify: 重载NFS
+
+    - name: 启动MySQL服务
+      systemd:
+        name: mysqld
+        state: started
+        enabled: yes
+
+    - name: 获取临时密码
+      shell: |
+        log_file=$(ls /var/log/mysqld.log | head -1)
+        grep 'temporary password' $log_file | awk '{print $NF}'
+      register: temp_password
+      changed_when: false  # 始终执行但不算作变更
+
+    - name: 重置root密码
+      mysql_user:
+        login_user: root
+        login_password: "{{ temp_password.stdout }}"
+        check_implicit_admin: yes
+        name: root
+        password: "{{ db_root_pass }}"
+        host: localhost
+        priv: "*.*:ALL,GRANT"
+      when: temp_password.stdout != ""
+
+  handlers:
+    - name: 重载系统服务
+      systemd:
+        daemon_reload: yes
+
+    - name: 重启 MySQL
+      systemd:
+        name: mysqld
+        state: restarted
+
+    - name: 重载NFS
+      systemd:
+        name: nfs-server
+        state: reloaded
+
+### 第3部分：Tomcat集群部署
+- name: 配置tomcat
+  hosts: tomcat
+  become: yes
+  vars:
+    JAVA_HOME: "/usr/local/jdk1.8.0_261"
+    java_security_path: "/usr/local/jdk1.8.0_261/jre/lib/security/java.security"
+    nfs_server: 192.168.32.177 #mysql-server的ip
+
+  tasks:
+    - name: 铐贝tar包
+      copy:
+        src: "{{ item }}"
+        dest: /tmp/
+      loop:
+         - jdk-8u261-linux-x64.tar.gz
+         - apache-tomcat-9.0.69.tar.gz
+
+    - name: 解压jdk包
+      unarchive:
+        src: /tmp/jdk-8u261-linux-x64.tar.gz
+        dest: /usr/local/
+        remote_src: yes
+        creates: /usr/local/jdk1.8.0_261
+
+    - name: 设置JDK环境变量
+      blockinfile:
+        path: /etc/profile.d/java.sh
+        create: yes
+        block: |
+          export JAVA_HOME={{ JAVA_HOME }}
+          export PATH=$JAVA_HOME/bin:$PATH
+
+    - name: 验证Java安全文件存在性
+      stat: 
+        path: "{{ java_security_path }}"  # 对应架构图中JDK安装路径
+      register: java_sec_stat  # 变量名必须保持一致
+
+    - name: 修改随机数生成器配置
+      ansible.builtin.lineinfile:
+        path: "{{ java_security_path }}"
+        regexp: '^securerandom\.source=.*'
+        line: 'securerandom.source=file:/dev/urandom'
+        backup: yes
+      when: 
+        - java_sec_stat.stat.exists  # ✅ 使用正确变量名
+        - java_sec_stat.stat.isreg   # 二次验证是否为常规文件
+      notify:
+        - 清理备份文件
+
+    - name: 安装NFS客户端
+      yum: 
+        name: nfs-utils
+        state: present
+
+    - name: 创建挂载点
+      file:
+        path: /usr/local/tomcat/webapps
+        state: directory
+        mode: 0777
+
+    - name: 持久化挂载NFS
+      mount:
+        path: /usr/local/tomcat/webapps
+        src: "{{ nfs_server }}:/usr/local/tomcat/webapps"
+        fstype: nfs
+        opts: defaults
+        state: mounted
+
+    - name: 上传zrlog war包
+      copy:
+        src: zrlog-1.7.1-baaecb9-release.war
+        dest: /usr/local/tomcat/webapps/zrlog.war  # 直接使用NFS共享目录
+        mode: 0644
+
+    - name: 启动服务
+      systemd:
+        name: NFS
+        state: started
+        enabled: yes
+
+    - name: 启动tomcat
+      shell: /usr/local/tomcat/bin/catalina.sh start
+
+  handlers:
+    - name: 清理备份文件
+      ansible.builtin.file:
+        path: "{{ java_security_path }}~"
+        state: absent
+
+    - name: 重启NFS
+      systemd:
+        name: nfs-server
+        state: reloaded
+
+    - name: 重载服务配置
+      systemd:
+        daemon_reload: yes
+
+### 第四部分：数据库初始化
+- name: 配置Zrlog数据库
+  hosts: mysql
+  become: yes
+  vars:
+    db_root_pass: "Test@123"  # 测试环境用简单密码
+    zrlog_db: zrlog
+    zrlog_user: zrlog
+    zrlog_pass: zrlog
+
+  tasks:
+    - name: 创建zrlog数据库
+      community.mysql.mysql_db:
+        name: "{{ zrlog_db }}"
+        encoding: utf8mb4
+        login_user: root
+        login_password: "{{ db_root_pass }}"
+        state: present
+
+    - name: 创建应用用户
+      community.mysql.mysql_user:
+        name: "{{ zrlog_user }}"
+        password: "{{ zrlog_pass }}"
+        host: "%"
+        priv: "{{ zrlog_db }}.*:ALL"
+        login_user: root
+        login_password: "{{ db_root_pass }}"
+        state: present
+
+    - name: 刷新权限
+      community.mysql.mysql_query:
+        login_user: root
+        login_password: "{{ db_root_pass }}"
+        query: "FLUSH PRIVILEGES"
+...
+
